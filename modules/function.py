@@ -1,17 +1,28 @@
 import re
 import numpy as np
-import copy
-import os
-import torch
 from pymatgen import core as mg
+import pickle
+import pandas as pd
 
-def check_cuda():
-  if torch.cuda.is_available():
-    cuda = True
-    os.environ['CUDA_VISIBLE_DEVICES'] = "0"
-  else:
-    cuda = False
-  return cuda
+gfa_dataset_file = 'gfa_dataset.txt'
+z_row_column_file = 'Z_row_column.txt'
+element_property_file = 'element_property.txt'
+common_path = "Files_from_GTDL_paper/{}" 
+RC = pickle.load(open(common_path.format(z_row_column_file), 'rb')) 
+new_index=[int(i[4]) for i in RC]#new order 
+Z_row_column = pickle.load(open(common_path.format(z_row_column_file), 'rb'))
+[property_name_list,property_list,element_name,_]=pickle.load(open(common_path.format(element_property_file), 'rb'))
+
+
+periodic_table_file = '1d_orders/periodic_table.csv'
+periodic_df = pd.read_csv(periodic_table_file)
+atomic_number_order = periodic_df['Symbol'].values[:103] #only the first 103 elements
+
+alternate_orders_file = '1d_orders/alternate_orders.pkl'
+with open(alternate_orders_file,'rb') as fid:
+    alternate_order_dict = pickle.load(fid)
+pettifor_order = alternate_order_dict['pettifor']
+modified_pettifor_order = alternate_order_dict['modified_pettifor']
 
 def special_formatting(comp):
   """take pymatgen compositions and does string formatting"""
@@ -22,29 +33,10 @@ def special_formatting(comp):
     string += k + '$_{' + '{}'.format(round(comp_d[k]/denom,3)) + '}$'
   return string
 
-
-def image_gfa(i,property_list,element_name,RC):#PTR psuedoimage using special formula
+def PTR(comp,property_list = property_list,element_name = element_name,RC=RC):#PTR psuedoimage using special formula
     #i0='Mo.5Nb.5'
     #i=i0.split(' ')[0]
-
-    X= [[[0.0 for ai in range(18)]for aj in range(9)] for ak in range(1) ]
-    gfa=re.findall('\[[a-c]?\]',i)[0]  
-    tx1_element=re.findall('[A-Z][a-z]?', i)#[B, Fe, P,No]
-    tx2_temp=re.findall('\$_{[0-9.]+}\$', i)#[$_{[50]}$, ] [50 30 20]
-    tx2_value=[float(re.findall('[0-9.]+', i_tx2)[0]) for i_tx2 in tx2_temp]
-    for j in range(len(tx2_value)):
-        index=int(property_list[element_name.index(tx1_element[j])][1])#atomic number
-        xi=int(RC[index-1][1])#row num
-        xj=int(RC[index-1][2])#col num
-        X[0][xi-1][xj-1]=tx2_value[j]/100.0
-    
-    #properties at the first row, from 5th to 8th column for hardness
-    X = np.array(X)
-    return X
-
-def image(i,property_list,element_name,RC):#PTR psuedoimage using special formula
-    #i0='Mo.5Nb.5'
-    #i=i0.split(' ')[0]
+    i = special_formatting(comp)
     X= [[[0.0 for ai in range(18)]for aj in range(9)] for ak in range(1) ]  
     tx1_element=re.findall('[A-Z][a-z]?', i)#[B, Fe, P,No]
     tx2_temp=re.findall('[0-9.]+', i)#[$_{[50]}$, ] [50 30 20]
@@ -59,53 +51,32 @@ def image(i,property_list,element_name,RC):#PTR psuedoimage using special formul
     X = np.array(X)
     return X
 
-def PTR(i,property_list,element_name,Z_row_column):#periodical table representation
-    #i='4 La$_{66}$Al$_{14}$Cu$_{10}$Ni$_{10}$ [c][15]'
-    X= [[[0.0 for ai in range(18)]for aj in range(9)] for ak in range(1) ]
-    gfa=re.findall('\[[a-c]?\]',i)[0]
-    
-    tx1_element=re.findall('[A-Z][a-z]?', i)#[B, Fe, P,No]
-    tx2_temp=re.findall('\$_{[0-9.]+}\$', i)#[$_{[50]}$, ] [50 30 20]
-    tx2_value=[float(re.findall('[0-9.]+', i_tx2)[0]) for i_tx2 in tx2_temp]
-    for j in range(len(tx2_value)):
-        index=int(property_list[element_name.index(tx1_element[j])][1])#atomic number Z
-        xi=int(Z_row_column[index-1][1])#row num
-        xj=int(Z_row_column[index-1][2])#col num
-        X[0][xi-1][xj-1]=tx2_value[j]/100.0
-    X_BMG=copy.deepcopy(X)
-    X_BMG[0][0][8]=1.0 #processing parameter
-    
-    if gfa=='[c]':
-        Y=[0,0]
-    if gfa=='[b]': 
-        Y=[1,0]
-    if gfa=='[a]' :
-        Y=[1,1]
+def get_1d_features(comp,order='atomic', return_elements = False):
+  """
 
-    return [X,X_BMG],Y 
+  Args:
+      comp (pymatgen composition): _description_
+      order (str, optional): specifies the order in which elements should appear in the output feature array. Allowed values are 'atomic', 'pettifor' and 'mod_pettifor'.. Defaults to 'atomic'.
+      return_elements (bool, optional): Specifies whether the element order is returned in the output. Defaults to False.
 
-class data_generator_gfa(object):
-    def __init__(self, comps, gfa_dataset):
-
-        #with open(csv_file, 'r') as fid:
-            #l = fid.readlines()
-        #data = [x.strip().split(',')[1] for x in l]
-        #data.remove('Composition')
-
-        #remove single elements from dataset, want only HEAs. Also keep unqiue compositions
-        self.length = len(comps)
-        all_imgs = []
-        for i in range(len(gfa_dataset)):
-          c_img = image_gfa(gfa_dataset[i])
-          all_imgs.append(c_img)
-        
-        self.real_data = np.array(all_imgs).reshape(-1,1,9,18)
-
-    def sample(self, N):
-        idx = np.random.choice(np.arange(self.length), N, replace=False)
-        data = self.real_data[idx]
-
-        return np.array(data, dtype=np.float32)
+  Returns:
+      A 1D feature array or a tuple containing feature array and element list
+  """
+  if order == 'atomic':
+      el_list = atomic_number_order
+  elif order == 'pettifor':
+       el_list = pettifor_order
+  elif order == 'mod_pettifor':
+       el_list = modified_pettifor_order
+  arr = np.zeros((1,len(el_list)))
+  for (el,v) in comp.get_el_amt_dict().items():
+        ind = np.where(np.array(el_list) == el)
+        arr[:,ind] = v
+  arr /= arr.sum(axis=1)
+  if return_elements:
+      return arr, el_list
+  else:
+       return arr
 
 
 
